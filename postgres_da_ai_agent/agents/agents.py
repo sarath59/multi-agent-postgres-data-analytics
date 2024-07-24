@@ -4,14 +4,21 @@ from postgres_da_ai_agent.modules import orchestrator
 from postgres_da_ai_agent.agents import agent_config
 import autogen
 import guidance
+import agentops
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
+# Initialize AgentOps
+agentops.init(os.getenv('AGENTOPS_API_KEY'))
 
 # ------------------------ PROMPTS ------------------------
-
 
 USER_PROXY_PROMPT = "A human admin. Interact with the Product Manager to discuss the plan. Plan execution needs to be approved by this admin."
 DATA_ENGINEER_PROMPT = "A Data Engineer. Generate the initial SQL based on the requirements provided. Send it to the Sr Data Analyst to be executed. "
 SR_DATA_ANALYST_PROMPT = "Sr Data Analyst. You run the SQL query using the run_sql function, send the raw response to the data viz team. You use the run_sql function exclusively."
-
 
 GUIDANCE_SCRUM_MASTER_SQL_NLQ_PROMPT = """
 Is the following block of text a SQL Natural Language Query (NLQ)? Please rank from 1 to 5, where:
@@ -40,9 +47,7 @@ Format your insights in JSON format.
 {{/geneach}}]
 ```"""
 
-
 INSIGHTS_FILE_REPORTER_PROMPT = "You're a data reporter. You write json data you receive directly into a file using the write_innovation_file function."
-
 
 # unused prompts
 COMPLETION_PROMPT = "If everything looks good, respond with APPROVED"
@@ -54,17 +59,13 @@ TEXT_REPORT_ANALYST_PROMPT = "Text File Report Analyst. You exclusively use the 
 JSON_REPORT_ANALYST_PROMPT = "Json Report Analyst. You exclusively use the write_json_file function on the report."
 YML_REPORT_ANALYST_PROMPT = "Yaml Report Analyst. You exclusively use the write_yml_file function on the report."
 
-
 # ------------------------ BUILD AGENT TEAMS ------------------------
 
-
+@agentops.record_function('build_data_eng_team')
 def build_data_eng_team(instruments: PostgresAgentInstruments):
     """
     Build a team of agents that can generate, execute, and report an SQL query
     """
-
-    # create a set of agents with specific roles
-    # admin user proxy agent - takes in the prompt and manages the group chat
     user_proxy = autogen.UserProxyAgent(
         name="Admin",
         system_message=USER_PROXY_PROMPT,
@@ -72,7 +73,6 @@ def build_data_eng_team(instruments: PostgresAgentInstruments):
         human_input_mode="NEVER",
     )
 
-    # data engineer agent - generates the sql query
     data_engineer = autogen.AssistantAgent(
         name="Engineer",
         llm_config=agent_config.base_config,
@@ -98,9 +98,8 @@ def build_data_eng_team(instruments: PostgresAgentInstruments):
         sr_data_analyst,
     ]
 
-
+@agentops.record_function('build_data_viz_team')
 def build_data_viz_team(instruments: PostgresAgentInstruments):
-    # admin user proxy agent - takes in the prompt and manages the group chat
     user_proxy = autogen.UserProxyAgent(
         name="Admin",
         system_message=USER_PROXY_PROMPT,
@@ -108,7 +107,6 @@ def build_data_viz_team(instruments: PostgresAgentInstruments):
         human_input_mode="NEVER",
     )
 
-    # text report analyst - writes a summary report of the results and saves them to a local text file
     text_report_analyst = autogen.AssistantAgent(
         name="Text_Report_Analyst",
         llm_config=agent_config.write_file_config,
@@ -119,7 +117,6 @@ def build_data_viz_team(instruments: PostgresAgentInstruments):
         },
     )
 
-    # json report analyst - writes a summary report of the results and saves them to a local json file
     json_report_analyst = autogen.AssistantAgent(
         name="Json_Report_Analyst",
         llm_config=agent_config.write_json_file_config,
@@ -147,7 +144,7 @@ def build_data_viz_team(instruments: PostgresAgentInstruments):
         yaml_report_analyst,
     ]
 
-
+@agentops.record_function('build_scrum_master_team')
 def build_scrum_master_team(instruments: PostgresAgentInstruments):
     user_proxy = autogen.UserProxyAgent(
         name="Admin",
@@ -165,7 +162,7 @@ def build_scrum_master_team(instruments: PostgresAgentInstruments):
 
     return [user_proxy, scrum_agent]
 
-
+@agentops.record_function('build_insights_team')
 def build_insights_team(instruments: PostgresAgentInstruments):
     user_proxy = autogen.UserProxyAgent(
         name="Admin",
@@ -193,10 +190,9 @@ def build_insights_team(instruments: PostgresAgentInstruments):
 
     return [user_proxy, insights_agent, insights_data_reporter]
 
-
 # ------------------------ ORCHESTRATION ------------------------
 
-
+@agentops.record_function('build_team_orchestrator')
 def build_team_orchestrator(
     team: str,
     agent_instruments: PostgresAgentInstruments,
@@ -235,20 +231,19 @@ def build_team_orchestrator(
 
     raise Exception("Unknown team: " + team)
 
-
 # ------------------------ CUSTOM AGENTS ------------------------
-
 
 class DefensiveScrumMasterAgent(autogen.ConversableAgent):
     """
     Custom agent that uses the guidance function to determine if a message is a SQL NLQ
     """
-
+    @agentops.record_function('DefensiveScrumMasterAgent_init')
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Register the new reply function for this specific agent
         self.register_reply(self, self.check_sql_nlq, position=0)
 
+    @agentops.record_function('DefensiveScrumMasterAgent_check_sql_nlq')
     def check_sql_nlq(
         self,
         messages: Optional[List[Dict]] = None,
@@ -269,16 +264,16 @@ class DefensiveScrumMasterAgent(autogen.ConversableAgent):
 
         return True, rank
 
-
 class InsightsAgent(autogen.ConversableAgent):
     """
     Custom agent that uses the guidance function to generate insights in JSON format
     """
-
+    @agentops.record_function('InsightsAgent_init')
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.register_reply(self, self.generate_insights, position=0)
 
+    @agentops.record_function('InsightsAgent_generate_insights')
     def generate_insights(
         self,
         messages: Optional[List[Dict]] = None,
@@ -287,3 +282,6 @@ class InsightsAgent(autogen.ConversableAgent):
     ):
         insights = guidance(DATA_INSIGHTS_GUIDANCE_PROMPT)
         return True, insights
+
+# End of program
+agentops.end_session('Success')
